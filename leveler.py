@@ -17,36 +17,65 @@ def dbg_print(msg):
         print(msg)
 
 
+def serial_read(timeout=0.1):
+    global serialport
+
+    serialport.timeout = 0.01
+
+    start = time.time()
+    data = ""
+    while not data.endswith("\n") and not data.endswith(">") and (time.time() - start) < timeout:
+        temp = serialport.read(1024).decode()
+        if len(temp) > 0:
+            data += temp
+    return data
+
+
 def init_serial():
     global serialport
 
-    print('Initializing communication.')
+    print('Initializing communication.', flush=True)
     try:
-        serialport = serial.Serial(PORT, BAUD, timeout=2)
-        data = serialport.readline()
-        while len(data) < 3:
-            data = serialport.readline()
+        serialport = serial.Serial(PORT, BAUD)
+        data = serial_read(timeout=3)
 
-        print("RECEIVED: {}".format(data.decode()))
+        print("RECEIVED: {}".format(data), flush=True)
 
     except Exception as e:
         sys.exit("ERROR: {}".format(e))
 
 
-def query_grbl(msg, timeout=None):
+def query_grbl(msg, timeout=1):
     global serialport
 
-    if timeout is not None:
-        serialport.timeout = timeout
-
+    dbg_print("Sending: {}".format(msg.replace('\n', '')))
     serialport.write(msg.encode())
-    data = serialport.readline()
-    return data.decode()
+    data = serial_read(timeout=timeout)
+    return data
 
 
-def get_status():
+def get_status(wait_for_idle=False):
+
     response = query_grbl("?")
-    print("Status: ", response.replace('\n', ''))
+    if wait_for_idle:
+        while not response.startswith("<Idle"):
+            response = query_grbl("?")
+
+    status_text = response.replace('\n', '')
+    status_data = response.split("|")
+    off_x = 0
+    off_y = 0
+    off_z = 0
+    for data in status_data:
+        if data.startswith("MPos:"):
+            [off_x, off_y, off_z] = data.split(":")[1].split(",")
+            break
+
+    float_x = float(off_x)
+    float_y = float(off_y)
+    float_z = float(off_z)
+
+    print("Status: {}\n\tOffset:{:.2f},{:.2f},{:.2f}".format(status_text, float_x, float_y, float_z))
 
 
 def offset(x=None, y=None, z=None, f=FEED_RATE):
@@ -66,7 +95,6 @@ def offset(x=None, y=None, z=None, f=FEED_RATE):
 
     msg += "f{}\n".format(f)
 
-    dbg_print("Sending:".format(msg.replace('\n', '')))
     dbg_print("Response: {}".format(query_grbl(msg)))
 
 
@@ -174,12 +202,14 @@ get_status()
 
 offset(MOVE_X, MOVE_Y, MOVE_Z)
 
+get_status(wait_for_idle=True)
+
 if LEVEL_FLAG:
     level()
 
 if HOME_FLAG:
     home()
 
-get_status()
+get_status(wait_for_idle=True)
 
 serialport.close()
