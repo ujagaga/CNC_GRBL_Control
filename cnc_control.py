@@ -154,8 +154,53 @@ def home(max_x=500, max_y=500, f=300):
     dbg_print("Status:".format(status))
 
 
+def laser_ctrl(power):
+    try:
+        pwr = int(power)
+    except:
+        pwr = 0
+
+    if pwr:
+        msg = f"M03 S{pwr}\n"
+    else:
+        msg = "M05\n"
+
+    response = query_grbl(msg)
+    dbg_print("Response:".format(response))
+
+
+def remove_comment(string):
+    if string.find(';') == -1:
+        return string
+    else:
+        return string[:string.index(';')]
+
+
+def stream(file_path):
+    global serialport
+
+    try:
+        dbg_print(f'Opening gcode file: {file_path}')
+        f = open(file_path, 'r')
+        dbg_print('Sending gcode')
+        for line in f:
+            ln = remove_comment(line)
+            ln = ln.strip()  # Strip all EOL characters for streaming
+            if not ln.isspace() and len(ln) > 0:
+                dbg_print('Sending: ' + ln)
+
+                serialport.write((ln + '\n').encode())  # Send g-code block
+                grbl_out = serialport.readline()  # Wait for response with carriage return
+                dbg_print(' : ' + grbl_out.decode().strip())
+        f.close()
+    except Exception as e:
+        print("ERROR: ", e)
+
+
 # Setup command line parameters
-parser = argparse.ArgumentParser(description='Leveling CNC router using GRBL commands and a Z axis probe.')
+parser = argparse.ArgumentParser(
+    description='Leveling CNC router using GRBL commands and a Z axis probe. NOTE: Please use "=" to assign values'
+)
 parser.add_argument('-l', '--level', help='Do the leveling. Touches the conductive surface with the milling tool.', action='store_true')
 parser.add_argument('-p', '--port', help='CNC router port.', default=PORT)
 parser.add_argument('-x', '--x', help='Move along X axis')
@@ -164,6 +209,9 @@ parser.add_argument('-z', '--z', help='Move along Z axis')
 parser.add_argument('-f', '--f', help='Set feed rate.', default=FEED_RATE)
 parser.add_argument('-0', '--zero', help='Move to x=0, y=0', action='store_true')
 parser.add_argument('-v', '--verbose', help='Write additional debug messages', action='store_true')
+parser.add_argument('-g', '--gcode', help='G-code file path. If other commands included, this is done last.',
+                    required=False)
+parser.add_argument('-b', '--beam', help='Laser beam intensity', type=int)
 
 args = parser.parse_args()
 
@@ -193,22 +241,28 @@ try:
 except:
     FEED_RATE = 100
 
-dbg_print("Accepting following parameters:\n  port = {},\n  leveling = {},\n  moving to home = {},"
-          "\n  offset_x = {},\n  offset_y = {},\n  offset_z = {},\n  feed rate = {}"
-          "".format(PORT, LEVEL_FLAG, HOME_FLAG, MOVE_X, MOVE_Y, MOVE_Z, FEED_RATE))
+dbg_print(
+    f"Accepting following parameters:\n  port = {PORT},\n  leveling = {LEVEL_FLAG},\n  moving to home = {HOME_FLAG},"
+    "\n  offset_x = {MOVE_X},\n  offset_y = {MOVE_Y},\n  offset_z = {MOVE_Z},\n  feed rate = {FEED_RATE}, "
+    "gcode_file = {args.gcode}"
+)
 
 init_serial()
 get_status()
 
 offset(MOVE_X, MOVE_Y, MOVE_Z)
 
-get_status(wait_for_idle=True)
-
 if LEVEL_FLAG:
     level()
 
 if HOME_FLAG:
     home()
+
+if args.beam:
+    laser_ctrl(args.beam)
+
+if args.gcode is not None:
+    stream(args.gcode)
 
 get_status(wait_for_idle=True)
 
